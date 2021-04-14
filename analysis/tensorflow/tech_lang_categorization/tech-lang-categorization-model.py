@@ -20,7 +20,7 @@ raw_test_ds = None
 MAX_FEATURES = 5000
 
 vectorize_layer = None
-DATASET_DIR = "./dataset/"
+DATASET_DIR = "dataset/"
 DATASET_URL = "http://storage.googleapis.com/download.tensorflow.org/data/stack_overflow_16k.tar.gz"
 DATASET_NAME = "stack_overflow"
 
@@ -100,8 +100,8 @@ def download_dataset():
         os.makedirs(DATASET_DIR)
 
     tf.keras.utils.get_file(DATASET_DIR + "aclImdb.tar.gz", url,
-                                      extract=False, cache_dir='.',
-                                      cache_subdir='')
+                            extract=False, cache_dir='',
+                            cache_subdir='')
     tarFile = tarfile.open(DATASET_DIR + "aclImdb.tar.gz")
     tarFile.extractall(DATASET_DIR)
     if (os.path.isdir(DATASET_DIR + DATASET_NAME)):
@@ -210,10 +210,23 @@ def main():
     result_model = export_model(model)
 
     examples = [
-        "Cannot seem to extend my interface. Should I use implements instead ?"
-    ]
-    result_model.predict(examples)
+        "Cannot seem to extend my interface. Should I use implements instead ?",
+        "I Keep getting ValueError when using Tensorflow",
+        "Which version of the JDK should I use ?",
+        "Which version or python is correct ?  2.7 or 3.6 ?",
 
+    ]
+    results = result_model.predict(examples)
+
+    print('Results from the saved model:')
+    print_my_examples(examples, results)
+    # print('Results from the model in memory:')
+    # print_my_examples(examples, original_results)
+
+def print_my_examples(inputs, results):
+  for i in range(len(inputs)):
+    result_for_printing = f'input: {inputs[i]:<30} : score: \nC#: {results[i][0]:.6f}\nJava: {results[i][1]:.6f}\nJavascript: {results[i][2]:.6f}\nPython: {results[i][3]:.6f}\n'
+    print(result_for_printing)
 
 
 

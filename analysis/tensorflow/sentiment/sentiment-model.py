@@ -20,7 +20,7 @@ raw_test_ds = None
 MAX_FEATURES = 10000
 
 vectorize_layer = None
-DATASET_DIR = "./dataset/"
+DATASET_DIR = "dataset/"
 DATASET_URL = "https://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
 DATASET_NAME = "aclImdb"
 
@@ -100,8 +100,8 @@ def download_dataset():
         os.makedirs(DATASET_DIR)
 
     tf.keras.utils.get_file(DATASET_DIR + DATASET_NAME + ".tar.gz", DATASET_URL,
-                                      extract=False, cache_dir='.',
-                                      cache_subdir='')
+                            extract=False, cache_dir='',
+                            cache_subdir='')
     tarFile = tarfile.open(DATASET_DIR + DATASET_NAME + ".tar.gz")
     tarFile.extractall(DATASET_DIR)
     if(os.path.isdir(DATASET_DIR + DATASET_NAME)):

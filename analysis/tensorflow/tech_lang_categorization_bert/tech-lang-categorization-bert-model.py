@@ -23,9 +23,9 @@ raw_test_ds = None
 MAX_FEATURES = 10000
 
 vectorize_layer = None
-DATASET_DIR = "./dataset/"
-DATASET_URL = "https://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
-DATASET_NAME = "aclImdb"
+DATASET_DIR = "dataset/"
+DATASET_URL = "http://storage.googleapis.com/download.tensorflow.org/data/stack_overflow_16k.tar.gz"
+DATASET_NAME = "stack_overflow"
 
 PREPROCESS_MODEL = "https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3"
 BERT_MODEL = "https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L-4_H-512_A-8/1"
@@ -40,7 +40,6 @@ def prepare_dataset():
     dataset_dir = os.path.join(DATASET_DIR)
     if not os.path.isdir(dataset_dir):
         download_dataset()
-
 
     train_dir = os.path.join(dataset_dir, 'train')
     test_dir = os.path.join(dataset_dir, 'test')
@@ -68,36 +67,11 @@ def prepare_dataset():
         test_dir,
         batch_size=batch_size)
 
-    sequence_length = 250
-
-    def custom_standardization(input_data):
-        lowercase = tf.strings.lower(input_data)
-        stripped_html = tf.strings.regex_replace(lowercase, '<br />', ' ')
-        return tf.strings.regex_replace(stripped_html,
-                                        '[%s]' % re.escape(string.punctuation),
-                                        '')
-
-    # Use the text vectorization layer to normalize, split, and map strings to
-    # integers. Note that the layer uses the custom standardization defined above.
-    # Set maximum_sequence length as all samples are not of the same length.
-    vectorize_layer = TextVectorization(
-        standardize=custom_standardization,
-        max_tokens=MAX_FEATURES,
-        output_mode='int',
-        output_sequence_length=sequence_length)
-
-    # Make a text-only dataset (without labels), then call adapt
-    train_text = raw_train_ds.map(lambda x, y: x)
-    vectorize_layer.adapt(train_text)
-
-    def vectorize_text(text, label):
-        text = tf.expand_dims(text, -1)
-        return vectorize_layer(text), label
 
     AUTOTUNE = tf.data.AUTOTUNE
-    train_ds = raw_train_ds.map(vectorize_text).cache().prefetch(buffer_size=AUTOTUNE)
-    val_ds = raw_val_ds.map(vectorize_text).cache().prefetch(buffer_size=AUTOTUNE)
-    test_ds = raw_test_ds.map(vectorize_text).cache().prefetch(buffer_size=AUTOTUNE)
+    train_ds = raw_train_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    val_ds = raw_val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    test_ds = raw_test_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
 
 def download_dataset():
@@ -105,8 +79,8 @@ def download_dataset():
         os.makedirs(DATASET_DIR)
 
     tf.keras.utils.get_file(DATASET_DIR + DATASET_NAME + ".tar.gz", DATASET_URL,
-                                      extract=False, cache_dir='.',
-                                      cache_subdir='')
+                            extract=False, cache_dir='',
+                            cache_subdir='')
     tarFile = tarfile.open(DATASET_DIR + DATASET_NAME + ".tar.gz")
     tarFile.extractall(DATASET_DIR)
     if(os.path.isdir(DATASET_DIR + DATASET_NAME)):
@@ -116,23 +90,42 @@ def download_dataset():
         os.removedirs(DATASET_DIR + DATASET_NAME)
 
 def create_model():
+    logging.info('model informations')
+    bert_preprocess_model = hub.KerasLayer(PREPROCESS_MODEL, name="preprocessing")
+    text_test = ['this is such an amazing movie!']
+    text_preprocessed = bert_preprocess_model(text_test)
+
+    print(f'Keys       : {list(text_preprocessed.keys())}')
+    print(f'Shape      : {text_preprocessed["input_word_ids"].shape}')
+    print(f'Word Ids   : {text_preprocessed["input_word_ids"][0, :12]}')
+    print(f'Input Mask : {text_preprocessed["input_mask"][0, :12]}')
+    print(f'Type Ids   : {text_preprocessed["input_type_ids"][0, :12]}')
+
+    bert_model = hub.KerasLayer(BERT_MODEL, trainable=True, name="BERT_encoder")
+    bert_results = bert_model(text_preprocessed)
+
+    print(f'Loaded BERT: {BERT_MODEL}')
+    print(f'Pooled Outputs Shape:{bert_results["pooled_output"].shape}')
+    print(f'Pooled Outputs Values:{bert_results["pooled_output"][0, :12]}')
+    print(f'Sequence Outputs Shape:{bert_results["sequence_output"].shape}')
+    print(f'Sequence Outputs Values:{bert_results["sequence_output"][0, :12]}')
 
     logging.info('creating model')
     text_input = tf.keras.layers.Input(shape=(), dtype=tf.string, name="text")
-    preprocessing_layer = hub.KerasLayer(PREPROCESS_MODEL, name="preprocessing")
-    encoder_input = preprocessing_layer(text_input)
-    encoder = hub.KerasLayer(BERT_MODEL, trainable=True, name="BERT_encoder")
-    outputs = encoder(encoder_input)
+    encoder_inputs = bert_preprocess_model(text_input)
+    outputs = bert_model(encoder_inputs)
     net = outputs["pooled_output"]
     net = tf.keras.layers.Dropout(0.1)(net)
-    net = tf.keras.layers.Dense(1, activation=None, name='classifier')(net)
+    net = tf.keras.layers.Dense(4, activation=None, name='classifier')(net)
     model = tf.keras.Model(text_input, net)
     logging.info('model created')
 
-    text_test = ['this is such an amazing movie!']
+    logging.info('model verification')
+    text_test = ['Value Error ']
     bert_raw_result = model(tf.constant(text_test))
     print(tf.sigmoid(bert_raw_result))
 
+    logging.info('model compilation')
     # Optimizer
     epochs = 5
     steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
@@ -145,8 +138,8 @@ def create_model():
                                               num_warmup_steps=num_warmup_steps,
                                               optimizer_type='adamw')
 
-    loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-    metrics = tf.metrics.BinaryAccuracy()
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    metrics = tf.metrics.SparseCategoricalAccuracy()
     model.compile(optimizer=optimizer,
                   loss=loss,
                   metrics=metrics)
@@ -155,22 +148,11 @@ def create_model():
 def train_model(model) -> History:
     epochs = 5
 
-    # On applique un early stopping a l'entrainement, pour éviter de continuer de travailler sur des échantillons déjà vlaidés
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            # Stop training when `val_loss` is no longer improving
-            monitor="val_loss",
-            # "no longer improving" being defined as "no better than 1e-2 less"
-            min_delta=0.02,
-            # "no longer improving" being further defined as "for at least 2 epochs"
-            patience=2,
-            verbose=1,
-        )
-    ]
 
     training_history = model.fit(
         x=train_ds,
-        validation_data=val_ds)
+        validation_data=val_ds,
+        epochs=epochs)
     return training_history
 
 def evaluate_model(model, training_history: History):
@@ -180,27 +162,29 @@ def evaluate_model(model, training_history: History):
     print("Accuracy: ", accuracy)
 
     history_dict = training_history.history
-    history_dict.keys()
+    print(history_dict.keys())
 
-    acc = history_dict['binary_accuracy']
-    val_acc = history_dict['val_binary_accuracy']
+    acc = history_dict['sparse_categorical_accuracy']
+    val_acc = history_dict['val_sparse_categorical_accuracy']
     loss = history_dict['loss']
     val_loss = history_dict['val_loss']
 
     epochs = range(1, len(acc) + 1)
+    fig = plt.figure(figsize=(10, 6))
+    fig.tight_layout()
 
+    plt.subplot(2, 1, 1)
     # "bo" is for "blue dot"
-    plt.plot(epochs, loss, 'bo', label='Training loss')
+    plt.plot(epochs, loss, 'r', label='Training loss')
     # b is for "solid blue line"
     plt.plot(epochs, val_loss, 'b', label='Validation loss')
     plt.title('Training and validation loss')
-    plt.xlabel('Epochs')
+    # plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
 
-    plt.show()
-
-    plt.plot(epochs, acc, 'bo', label='Training acc')
+    plt.subplot(2, 1, 2)
+    plt.plot(epochs, acc, 'r', label='Training acc')
     plt.plot(epochs, val_acc, 'b', label='Validation acc')
     plt.title('Training and validation accuracy')
     plt.xlabel('Epochs')
@@ -210,40 +194,41 @@ def evaluate_model(model, training_history: History):
     plt.show()
 
 def export_model(model):
-    export_model = tf.keras.Sequential([
-      vectorize_layer,
-      model,
-      layers.Activation('sigmoid')
-    ])
+    saved_model_path = './{}_bert'.format(DATASET_NAME.replace('/', '_'))
 
-    # Application de la fonction de loss
-    export_model.compile(
-        loss=losses.BinaryCrossentropy(from_logits=True), optimizer="adam", metrics=['accuracy']
-    )
+    model.save(saved_model_path, include_optimizer=False)
 
-    # Test it with `raw_test_ds`, which yields raw strings
-    loss, accuracy = export_model.evaluate(raw_test_ds)
-    print(accuracy)
-    return export_model
+    return saved_model_path
+
+def load_model(path):
+    return  tf.saved_model.load(path)
 
 def main():
-    prepare_dataset()
-    model = create_model()
-    training_history = train_model(model)
-    evaluate_model(model, training_history)
-    result_model = export_model(model)
-    #
-    # examples = [
-    #     "The movie was great!",
-    #     "The movie was okay.",
-    #     "The movie was terrible...",
-    #     "The movie was terrific!",
-    #     "Le film était pas terrible",
-    #     "Le film était terrible !",
-    #     "Le film était terriblement bien"
-    # ]
-    # result_model.predict(examples)
-    text_test = ['this is such an amazing movie!']
-    result_model.predict(text_test)
+    # prepare_dataset()
+    # model = create_model()
+    # training_history = train_model(model)
+    # evaluate_model(model, training_history)
+    #saved_model_path = export_model(model)
+    result_model = load_model('./{}_bert'.format(DATASET_NAME.replace('/', '_')))
+    examples = [
+        "Cannot seem to extend my interface. Should I use implements instead ?",
+        "I Keep getting ValueError when using Tensorflow",
+        "Which version of the JDK should I use ?",
+        "Which version or python is correct ?  2.7 or 3.6 ?",
+
+    ]
+
+    reloaded_results = tf.sigmoid(result_model(tf.constant(examples)))
+    # original_results = tf.sigmoid(model(tf.constant(examples)))
+
+    print('Results from the saved model:')
+    print_my_examples(examples, reloaded_results)
+    # print('Results from the model in memory:')
+    # print_my_examples(examples, original_results)
+
+def print_my_examples(inputs, results):
+  for i in range(len(inputs)):
+    result_for_printing = f'input: {inputs[i]:<30} : score: \nC#: {results[i][0]:.6f}\nJava: {results[i][1]:.6f}\nJavascript: {results[i][2]:.6f}\nPython: {results[i][3]:.6f}\n'
+    print(result_for_printing)
 
 main()
