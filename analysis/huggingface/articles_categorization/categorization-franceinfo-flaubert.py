@@ -69,8 +69,12 @@ tokenizer = FlaubertTokenizer.from_pretrained(model_name)
 
 # Define Trainer parameters
 
-dataset_path = "all-articles.json"
-model_path = "output/trainer-flaubert-small-3"
+dataset_path = "articles-without-html.json"
+model_path = "trainer-flaubert-small-3"
+
+# Initialisation des solutions possible
+labels = ClassLabel(names=categories_list)
+
 # Create torch dataset
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, encodings, labels=None):
@@ -267,33 +271,35 @@ def analyze_data():
 
 def preprocess_data():
     global raw_test_ds, raw_validation_ds, raw_train_ds
-    labels = ClassLabel(names = categories_list)
-    logging.info("Preprocessing data")
-    # ----- 1. Preprocess data -----#
+
+    # Chargement des datasets d'entrainement et de validation
     raw_train_ds = datasets.load_from_disk('./output/processed-dataset/train')
     raw_validation_ds = datasets.load_from_disk('./output/processed-dataset/valid')
 
-    # Preprocess data
+    # Transformation des datasets d'entrainement et de validation
     X_train = list(raw_train_ds["article"])
     y_train = labels.str2int(raw_train_ds["categorie"])
     X_val = list(raw_validation_ds["article"])
     y_val = labels.str2int(raw_validation_ds["categorie"])
+
+    # Tokenization des datasets d'entrainement et de validation
     X_train_tokenized = tokenizer(X_train, padding=True, truncation=True, max_length=512)
     X_val_tokenized = tokenizer(X_val, padding=True, truncation=True, max_length=512)
-
-
-
-
     train_dataset = Dataset(X_train_tokenized, y_train)
     val_dataset = Dataset(X_val_tokenized, y_val)
 
-    logging.info("Data preprocessed")
     return train_dataset, val_dataset
 
 def model_init():
     return FlaubertForSequenceClassification.from_pretrained(model_name, num_labels=len(categories_list))
 
 def create_model(train_dataset, val_dataset):
+
+    # Initialisation du modèle
+    model = FlaubertForSequenceClassification.from_pretrained("flaubert/flaubert_base_cased", num_labels=len(categories_list))
+    tokenizer = FlaubertTokenizer.from_pretrained("flaubert/flaubert_base_cased")
+
+    # Définition des métrics à utiliser
     def compute_metrics(p):
         pred, labels = p
         pred = np.argmax(pred, axis=1)
@@ -305,12 +311,10 @@ def create_model(train_dataset, val_dataset):
 
         return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
 
-    # Define Trainer
+    # Configuration du trainer
     args = TrainingArguments(
         output_dir="output",
         learning_rate=1e-5,
-        # tpu_num_cores=8,
-        # adam_epsilon=1e-8,
         evaluation_strategy=IntervalStrategy.EPOCH,
         per_device_train_batch_size=3,
         per_device_eval_batch_size=3,
@@ -319,14 +323,15 @@ def create_model(train_dataset, val_dataset):
         metric_for_best_model="accuracy",
         load_best_model_at_end=True
     )
+
+    # Initialisation du trainer
     trainer = Trainer(
-        model_init=model_init,
+        model=model,
         args=args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         tokenizer=tokenizer,
         compute_metrics=compute_metrics,
-
         callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
     )
     return trainer
@@ -343,13 +348,6 @@ def hyperparameter_space(trial):
 
 def train_model(trainer: Trainer):
 
-    # best_run = trainer.hyperparameter_search(n_trials=10,
-    #                                          hp_space=hyperparameter_space,
-    #                                          direction="maximize", backend=HPSearchBackend.RAY,
-    #                                          resources_per_trial={"cpu": 1, "gpu": 1},)
-    # for n, v in best_run.hyperparameters.items():
-    #     setattr(trainer.args, n, v)
-
     trainer = trainer.train()
     return trainer
 
@@ -361,48 +359,33 @@ def save_model(trainer: Trainer):
 
 def load_model():
     # Load trained model
-
     model = FlaubertForSequenceClassification.from_pretrained(model_path, num_labels=len(categories_list))
 
     # Define test trainer
     return Trainer(model)
 
 def main():
-    # analyze_data()
+    analyze_data()
     train_dataset, val_dataset = preprocess_data()
     trainer = create_model(train_dataset, val_dataset)
     train_model(trainer)
     evaluate_model(trainer)
     save_model(trainer)
     saved_model = load_model()
-    # model_analysis(saved_model)
 
-
-    raw_test_ds = datasets.load_from_disk('./output/processed-dataset/test')
-
-
-    labels = ClassLabel(names=categories_list)
-    X_val = list(raw_test_ds["article"])
-    y_val = labels.str2int(raw_test_ds["categorie"])
-    X_test_tokenized = tokenizer(X_val, padding=True, truncation=True, max_length=512)
-    # Make prediction
-    raw_pred, _, _ = saved_model.predict(Dataset(X_test_tokenized))
-    #
-    # # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
-    test_acc  = metrics.accuracy_score(y_val, y_pred)
-    print("Test accuracy : {}".format(test_acc))
-
-    sport = "\nRafael Nadal se disait \u00ab\u00a0pr\u00eat et en confiance\u00a0\u00bb avant d\u2019attaquer la saison sur terre battue.\u00a0Et nous, bah, on plaignait d\u2019avance ses adversaires. Et pourtant\u00a0:\u00a0ce vendredi Andrey Rublev (8e mondial) a assomm\u00e9 l\u2019Espagnol (3e) 6-2, 4-6, 6-2 en 2h32, en quarts de finale du Masters 1000 de \r\nMonte-Carlo. Rublev retrouvera Casper Ruud (27e) dans le dernier carr\u00e9.\r\n\r\nNadal\u00a0ne s\u2019est pas montr\u00e9 au sommet de son art, commettant de nombreuses fautes, mais il a souvent \u00e9t\u00e9 pris par les coups violents et pr\u00e9cis du Russe. Ce dernier jouera sa deuxi\u00e8me demi-finale de Masters 1000 apr\u00e8s celle de Miami au d\u00e9but du mois.\r\n\r\nMedvedev, Djokovic et Nadal out\r\n\r\n\u00ab\u00a0Pour lui, \u00e7a doit \u00eatre incroyablement difficile de jouer avec cette pression de devoir toujours gagner. Je suis sous le choc de voir le niveau auquel il peut \u00e9voluer malgr\u00e9 cette pression. C\u2019est beaucoup plus facile de jouer quand on n\u2019a rien \u00e0 perdre\u00a0\u00bb, a comment\u00e9 Rublev.\r\n\r\nApr\u00e8s l\u2019exclusion du N.2 mondial Daniil Medvedev pour un test positif au Covid-19\u00a0avant le d\u00e9but du tournoi, puis l\u2019\u00e9limination du N.1 Novak Djokovic la veille en 8es de finale, Nadal est la troisi\u00e8me t\u00eate d\u2019affiche \u00e0 quitter le tournoi mon\u00e9gasque.\r\n\r\nL\u2019Espagnol n\u2019avait plus jou\u00e9 depuis l\u2019Open d\u2019Australie en f\u00e9vrier avant de s\u2019aligner sur le tournoi mon\u00e9gasque qu\u2019il a remport\u00e9 \u00e0 onze reprises.\r\n\r\nSportMonte-Carlo\u00a0: Novak Djokovic balay\u00e9 en deux manches par Daniel EvansSportMonte-Carlo\u00a0: \u00ab\u00a0J\u2019en ai rien \u00e0 branler\u00a0\u00bb, Beno\u00eet Paire en roue libre apr\u00e8s sa d\u00e9faite au premier tour\n"
-    divers = "\nLe\u00a0cancer l\u2019a emport\u00e9e.\u00a0L\u2019actrice britannique Helen McCrory, qui a jou\u00e9 au cin\u00e9ma dans Skyfall et Harry Potter, et \u00e0 la t\u00e9l\u00e9vision dans la s\u00e9rie Peaky Blinders, est morte \u00e0 l\u2019\u00e2ge de 52 ans d\u2019un cancer, a annonc\u00e9 ce vendredi son \u00e9poux Damian Lewis sur Twitter.\r\n\r\n\u00ab\u00a0J\u2019ai le coeur bris\u00e9 d\u2019annoncer que, apr\u00e8s une bataille h\u00e9ro\u00efque contre le cancer, la femme magnifique qu\u2019est Helen McCrory est morte paisiblement chez elle, au milieu d\u2019une vague d\u2019amour de ses amis et de sa famille\u00a0\u00bb, a d\u00e9clar\u00e9 le com\u00e9dien dans un court texte sur le r\u00e9seau social.\u00a0\u00ab\u00a0Elle est morte comme elle a v\u00e9cu. Sans peur. Dieu que nous l\u2019aimons et savons la chance que nous avons eue de l\u2019avoir dans nos vies\u00a0\u00bb, a-t-il ajout\u00e9.\r\n\r\npic.twitter.com\/gSx8ib9PY9\u2014 Damian Lewis (@lewis_damian) April 16, 2021\n\nStar de\u00a0Peaky Blinders\n\r\n\r\nApparue pour la premi\u00e8re fois au cin\u00e9ma dans un petit r\u00f4le dans Entretien avec un Vampire\u00a0apr\u00e8s avoir commenc\u00e9 sa carri\u00e8re \u00e0 la t\u00e9l\u00e9vision, Helen McCrory a notamment incarn\u00e9 Narcissa Malfoy dans les derniers films de la saga Harry Potter.\u00a0\r\n\r\nL\u2019actrice, qui a \u00e9galement jou\u00e9 dans Skyfall\u00a0de la saga James Bond, incarnait\u00a0\u00e0 la perfection le personnage de tante Polly, matriarche du clan Shelby, dans la s\u00e9rie britannique \u00e0 succ\u00e8s Peaky Blinders, qui retrace les aventures d\u2019une famille de malfrats de Birmingham au d\u00e9but du 20e\u00a0si\u00e8cle.\u00a0Elle avait \u00e9pous\u00e9 \r\nDamian Lewis en 2007, avec qui elle a eu deux enfants.\r\n\r\nPeopleCoronavirus : Devant l\u2019insistance du casting, le tournage de \u00ab\u00a0Peaky Blinders\u00a0\u00bb s\u2019est arr\u00eat\u00e9 d\u00e8s le d\u00e9but de la pand\u00e9mie\n"
-    economie = "\nL'Europe doit \u00eatre \u00ab\u00a0aux avant-postes\u00a0\u00bb de la cr\u00e9ation d\u2019une monnaie num\u00e9rique commune et \u00ab\u00a0activement\u00a0\u00bb oeuvrer pour que ce nouvel outil de paiement voie le jour, a plaid\u00e9 vendredi le ministre \r\nallemand des Finances, Olaf Scholz.\r\n\r\n\u00ab\u00a0Une Europe souveraine a besoin de solutions de paiement innovantes et comp\u00e9titives\u00a0\u00bb, a d\u00e9clar\u00e9 Olaf\u00a0Scholz en amont d\u2019une visioconf\u00e9rence des ministres des Finances de la zone euro (Eurogroupe), qui doit aborder cette question. Pour le ministre social-d\u00e9mocrate, \u00ab\u00a0l\u2019Europe doit \u00eatre aux avant-postes sur la question des monnaies digitales de banque centrale et doit activement le faire progresser\u00a0\u00bb.\r\n\r\nLa BCE d\u00e9cidera cet \u00e9t\u00e9\r\n\r\nAinsi, la premi\u00e8re \u00e9conomie de la zone euro  \u00ab\u00a0soutiendra de fa\u00e7on constructive\u00a0\u00bb les travaux engag\u00e9s par la Banque centrale europ\u00e9enne (BCE) en vue de la possible cr\u00e9ation d\u2019un euro digital. \u00ab\u00a0Nous ne devons pas \u00eatre spectateurs\u00a0\u00bb de cette \u00e9volution, a estim\u00e9 le ministre allemand qui a \u00e9galement appel\u00e9 \u00e0 \u00ab\u00a0ne pas se rendre d\u00e9pendant l\u00e0 o\u00f9 la souverainet\u00e9 des Etats est en jeu\u00a0\u00bb.\r\n\r\nLa BCE d\u00e9cidera cet \u00e9t\u00e9 si elle se lance ou non dans la cr\u00e9ation d\u2019un euro num\u00e9rique, \u00e0 l\u2019issue d\u2019une vaste consultation et d\u2019\u00e9tudes engag\u00e9es ces derniers mois, a indiqu\u00e9 cette semaine l\u2019un de ses responsables.\r\n\r\nPas besoin de compte en banque\r\n\r\nSelon une enqu\u00eate publique de l\u2019institution de Francfort, \u00e9galement d\u00e9voil\u00e9e cette semaine, les particuliers et les professionnels interrog\u00e9s attendent en premier lieu de la monnaie num\u00e9rique la confidentialit\u00e9 (43\u00a0%), suivie de la s\u00e9curit\u00e9 (18\u00a0%), la capacit\u00e9 de payer dans la zone euro (11\u00a0%), l\u2019absence de frais suppl\u00e9mentaires (9\u00a0%) et la possibilit\u00e9 de payer en dehors de l\u2019internet (8\u00a0%).\r\n\r\nLa question des cryptomonnaies est \u00e9tudi\u00e9e de pr\u00e8s par de nombreux pays, face notamment au projet de monnaie num\u00e9rique initi\u00e9 par Facebook, la Libra.\u00a0Plusieurs banques centrales planchent sur le sujet, la Chine et son projet de crypto-yuan comptant parmi les plus avanc\u00e9s.\r\n\r\nLes monnaies num\u00e9riques sont stock\u00e9es sur des supports \u00e9lectroniques, sans avoir besoin de compte en banque, et sont accept\u00e9es comme moyen de paiement par des entreprises.\r\n\r\nMondeCoronavirus\u00a0: Contrairement \u00e0 une grande partie de l\u2019Europe, la Suisse all\u00e8ge ses restrictionsSant\u00e9Coronavirus : Peut-on s'inspirer des pays en d\u00e9confinement pour r\u00e9ussir le n\u00f4tre ?\n"
-
-    examples = [sport, divers, economie]
+    # On initialise nos exemples
+    examples = [
+        "\nRafael Nadal se disait \u00ab\u00a0pr\u00eat et en confiance\u00a0\u00bb avant d\u2019attaquer la saison sur terre battue...",
+        "\nLe\u00a0cancer l\u2019a emport\u00e9e.\u00a0L\u2019actrice britannique Helen McCrory, qui a jou\u00e9 au cin\u00e9ma dans Skyfall et Harry Potter...",
+        "\nL\u2019Europe doit \u00eatre \u00ab\u00a0aux avant-postes\u00a0\u00bb de la cr\u00e9ation d\u2019une monnaie num\u00e9rique commune..."
+    ]
     examples_tokenized = tokenizer(examples, padding=True, truncation=True, max_length=512)
 
+    # On exécute notre modèle sur nos exemples
     raw_pred, _, _ = saved_model.predict(Dataset(examples_tokenized))
     y_pred = np.argmax(raw_pred, axis=1)
 
+    # Et on affiche les résultats
     for pred in labels.int2str(y_pred):
-        print("Categorie : {}".format(pred))
+         print("Categorie : {}".format(pred))
 main()

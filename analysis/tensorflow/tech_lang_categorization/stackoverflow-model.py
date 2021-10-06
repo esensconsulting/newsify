@@ -27,8 +27,8 @@ def download_dataset():
     :return:
     """
     DATASET_DIR = "dataset/"
-    DATASET_URL = "https://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
-    DATASET_NAME = "aclImdb"
+    DATASET_URL = "http://storage.googleapis.com/download.tensorflow.org/data/stack_overflow_16k.tar.gz"
+    DATASET_NAME = "stack_overflow"
 
     # On vide le dossier dataset systématiquement pour s'assurer d'une copie propre
     if os.path.exists(DATASET_DIR):
@@ -36,18 +36,14 @@ def download_dataset():
     os.makedirs(DATASET_DIR)
 
     # Utilisation de l'utilitaire get_file pour récupérer le dataset et l'extraire
-    tf.keras.utils.get_file(DATASET_NAME + ".tar.gz", DATASET_URL,
-                            extract=True,
+    tf.keras.utils.get_file(DATASET_DIR + DATASET_NAME + ".tar.gz", DATASET_URL,
+                            extract=False,
                             cache_dir='./',
                             cache_subdir='./')
 
-
-    # On déplace l'ensemble du jeu de données dans le dossier dataset pour plus de clarté
-    files_list = os.listdir(DATASET_NAME)
-    shutil.rmtree(DATASET_NAME + "/train/unsup")
-
-    for files in files_list:
-        shutil.move(DATASET_NAME + "/" + files, DATASET_DIR)
+    # Extraction
+    tarFile = tarfile.open(DATASET_DIR + DATASET_NAME + ".tar.gz")
+    tarFile.extractall(DATASET_DIR)
 
 
 def prepare_dataset():
@@ -129,11 +125,11 @@ def create_model():
         layers.Dropout(0.2),
         layers.GlobalAveragePooling1D(),    # Calcul d'une moyenne
         layers.Dropout(0.2),
-        layers.Dense(1)])   # On ne veut qu'un seul résultat, la probabilité de positivité
+        layers.Dense(4)])   # On ne veut qu'un seul résultat, la probabilité de positivité
 
-    model.compile(loss=losses.BinaryCrossentropy(from_logits=True),
+    model.compile(loss=losses.SparseCategoricalCrossentropy(from_logits=True),
                   optimizer='adam',
-                  metrics=tf.metrics.BinaryAccuracy(threshold=0.0))
+                  metrics=tf.metrics.SparseCategoricalAccuracy())
     return model
 
 def train_model(model) -> History:
@@ -169,8 +165,8 @@ def evaluate_model(model, training_history: History):
     history_dict = training_history.history
     history_dict.keys()
 
-    acc = history_dict['binary_accuracy']
-    val_acc = history_dict['val_binary_accuracy']
+    acc = history_dict['sparse_categorical_accuracy']
+    val_acc = history_dict['val_sparse_categorical_accuracy']
     loss = history_dict['loss']
     val_loss = history_dict['val_loss']
 
@@ -205,7 +201,7 @@ def export_model(model):
 
     # Application de la fonction de loss
     export_model.compile(
-        loss=losses.BinaryCrossentropy(from_logits=False), optimizer="adam", metrics=['accuracy']
+        loss=losses.SparseCategoricalCrossentropy(from_logits=False), optimizer="adam", metrics=['accuracy']
     )
 
     # Test it with `raw_test_ds`, which yields raw strings
